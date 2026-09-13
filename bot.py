@@ -54,6 +54,13 @@ IA_LEAK_URL = IA_BASE + "/leak?key=" + IA_KEY + "&q={query}"
 HITECK_LEAK_URL = "https://num-info-hiteck.asurpapa.workers.dev/api?key=happyrb&num={number}"
 
 VEHINFO_URL = "https://vehicleinfo-byrack.vercel.app/api?search={reg}"
+YESUKIE_TRUECALLER_URL = "https://yesukie.vercel.app/truecaller?q={query}"
+YESUKIE_FAMILY_URL = "https://yesukie.vercel.app/family-info?q={query}"
+YESUKIE_EMAIL_URL = "https://yesukie.vercel.app/email-info?q={query}"
+YESUKIE_FREE_FIRE_URL = "https://yesukie.vercel.app/free-fire-info?q={query}"
+YESUKIE_AADHAR_BANK_URL = "https://yesukie.vercel.app/aadhar-to-bank?q={query}"
+YESUKIE_AADHAR_PAN_URL = "https://yesukie.vercel.app/aadhar-to-pan-mask?q={query}"
+YESUKIE_GST_URL = "https://yesukie.vercel.app/gst-info?q={query}"
 
 IA_ID_URL    = IA_BASE + "/id?key="    + IA_KEY + "&q={query}"
 IA_TG_URL    = IA_BASE + "/tg?key="    + IA_KEY + "&q={query}"
@@ -390,6 +397,90 @@ def val(v):
     return str(v).strip()
 
 
+API_META_KEYS = {
+    "success", "tool", "query", "owner", "admin", "message", "msg",
+    "error", "code", "request_ref", "wallet_balance", "wallet_debited",
+    "service_price", "credits", "note",
+}
+
+
+def api_value_present(value):
+    if value is None or value == "":
+        return False
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return str(value).strip().lower() not in ("", "none", "null", "n/a", "na")
+
+
+def api_value_text(value):
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(api_value_text(item) for item in value if api_value_present(item))
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            if api_value_present(item):
+                parts.append(str(key).replace("_", " ").title() + ": " + api_value_text(item))
+        return "; ".join(parts)
+    return str(value).replace("`", "'").replace("\\", "").strip()
+
+
+def get_api_data(raw):
+    """Return usable API data, treating API-level failures as no data."""
+    if not isinstance(raw, dict) or raw.get("success") is not True:
+        return None
+    data = raw.get("data")
+    if data is None:
+        data = raw.get("result")
+    if not isinstance(data, (dict, list)) or not data:
+        return None
+    if isinstance(data, dict):
+        status = str(data.get("status", "")).strip().lower()
+        if status in ("fail", "failed", "failure", "error", "not found", "no data"):
+            return None
+        if api_value_present(data.get("error")):
+            return None
+        if not any(
+            api_value_present(value)
+            for key, value in data.items()
+            if str(key).lower() not in API_META_KEYS and str(key).lower() != "status"
+        ):
+            return None
+    return data
+
+
+def api_field_lines(data, preferred_fields=None):
+    """Build compact display lines without exposing API metadata fields."""
+    if not isinstance(data, dict):
+        return []
+    lines = []
+    used = set()
+    for label, keys in preferred_fields or []:
+        for key in keys:
+            value = data.get(key)
+            if api_value_present(value):
+                lines.append("• *" + label + ":* `" + api_value_text(value) + "`")
+                used.add(key.lower())
+                break
+    if lines:
+        return lines
+    for key, value in data.items():
+        key_text = str(key)
+        if key_text.lower() in API_META_KEYS or key_text.lower() == "status":
+            continue
+        if api_value_present(value):
+            label = key_text.replace("_", " ").replace("-", " ").title()
+            lines.append("• *" + label + ":* `" + api_value_text(value) + "`")
+    return lines
+
+
+async def safe_fetch_json(url, timeout=15):
+    """Return None for timeout/HTTP/JSON errors so callers can show Data Not Found."""
+    try:
+        return await fetch_json(url, timeout=timeout)
+    except Exception:
+        return None
+
+
 async def delete_msg(context, chat_id, msg_id):
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
@@ -419,6 +510,19 @@ def schedule_result_cleanup(context, chat_id, message_ids):
             )
         except Exception:
             pass
+
+    task = asyncio.create_task(_cleanup())
+    _result_cleanup_tasks.add(task)
+    task.add_done_callback(_result_cleanup_tasks.discard)
+
+
+def schedule_join_message_cleanup(context, chat_id, message_id):
+    """Delete the join prompt after two minutes without sending another message."""
+    async def _cleanup():
+        await asyncio.sleep(RESULT_DELETE_SECONDS)
+        await delete_msg(context, chat_id, message_id)
+        if context.user_data.get("join_msg_id") == message_id:
+            context.user_data.pop("join_msg_id", None)
 
     task = asyncio.create_task(_cleanup())
     _result_cleanup_tasks.add(task)
@@ -515,6 +619,7 @@ async def send_join_message(update, context):
     )
     sent = await update.message.reply_text(text, reply_markup=join_button, parse_mode="Markdown")
     context.user_data["join_msg_id"] = sent.message_id
+    schedule_join_message_cleanup(context, update.message.chat_id, sent.message_id)
 
 
 async def delete_join_message(context, chat_id):
@@ -526,11 +631,12 @@ async def delete_join_message(context, chat_id):
     except Exception:
         pass
     context.user_data.pop("join_msg_id", None)
-    await context.bot.send_message(
+    sent = await context.bot.send_message(
         chat_id=chat_id,
         text="✅ *You have successfully joined our channel!*\n\nYou can now use the bot freely. Send /start to begin.",
         parse_mode="Markdown",
     )
+    schedule_join_message_cleanup(context, chat_id, sent.message_id)
 
 
 async def check_joined_callback(update, context):
@@ -543,11 +649,12 @@ async def check_joined_callback(update, context):
         return
     await query.message.delete()
     context.user_data.pop("join_msg_id", None)
-    await context.bot.send_message(
+    sent = await context.bot.send_message(
         chat_id=query.message.chat_id,
         text="✅ *You have successfully joined our channel!*\n\nYou can now use the bot freely. Send /start to begin.",
         parse_mode="Markdown",
     )
+    schedule_join_message_cleanup(context, query.message.chat_id, sent.message_id)
 
 
 def main_menu_markup():
@@ -1765,22 +1872,12 @@ async def familyinfo_lookup(update, context):
         return
 
     searching = await update.message.reply_text("🔍 Searching family info...")
-    try:
-        raw = await fetch_json(IA_FAMILYINFO_URL.format(aadhar=aadhar), timeout=12)
-    except Exception as e:
-        await delete_msg(context, chat_id, searching.message_id)
-        await update.message.reply_text("*Server Error!*\n\nRequest failed. Please try again later.", parse_mode="Markdown")
-        await log_error_to_admin(context, "familyinfo_lookup: " + str(e))
-        return
+    raw = await safe_fetch_json(YESUKIE_FAMILY_URL.format(query=aadhar), timeout=20)
 
     await delete_msg(context, chat_id, searching.message_id)
 
-    if not isinstance(raw, dict) or not raw.get("success"):
-        await send_expiring_lookup_message(update, context, "*❌ Data Not Found!*\n\nNo family info found for this Aadhar.", parse_mode="Markdown")
-        return
-
-    data = raw.get("data") or raw.get("result")
-    if not data:
+    data = get_api_data(raw)
+    if data is None:
         await send_expiring_lookup_message(update, context, "*❌ Data Not Found!*\n\nNo family info found for this Aadhar.", parse_mode="Markdown")
         return
 
@@ -2034,88 +2131,352 @@ async def true_lookup(update, context):
     phone = context.args[0].strip().replace("+", "").replace(" ", "")
 
     searching = await update.message.reply_text("🔍 Looking up caller ID...")
-
-    async def fetch_truecaller_api1():
-        try:
-            return await fetch_json(TRUECALLER_URL.format(phone=phone), timeout=15)
-        except Exception:
-            return None
-
-    async def fetch_truecaller_api2():
-        try:
-            return await fetch_json(RACK_TRUECALLER_URL.format(phone=phone), timeout=15)
-        except Exception:
-            return None
-
-    raw1, raw2 = await asyncio.gather(fetch_truecaller_api1(), fetch_truecaller_api2())
+    raw = await safe_fetch_json(YESUKIE_TRUECALLER_URL.format(query=phone), timeout=20)
 
     await delete_msg(context, chat_id, searching.message_id)
 
-    record = raw1.get("record") if isinstance(raw1, dict) else None
-    rack_data = raw2.get("data") if isinstance(raw2, dict) and raw2.get("success") else None
-
-    # Need at least one source to have data
-    has_api1 = isinstance(record, dict) and record.get("name")
-    has_api2 = isinstance(rack_data, dict) and rack_data
-
-    if not has_api1 and not has_api2:
+    data = get_api_data(raw)
+    if not isinstance(data, dict):
         await send_expiring_lookup_message(update, context, "*❌ Data Not Found!*\n\nNo caller info found for this number.", parse_mode="Markdown")
         return
 
     increment_search(user_id)
 
-    display_number = phone
+    def field(*keys):
+        normalized = {
+            str(key).lower().replace(" ", "_"): value
+            for key, value in data.items()
+        }
+        for key in keys:
+            value = normalized.get(key.lower().replace(" ", "_"))
+            if api_value_present(value):
+                return value
+        return None
+
+    display_number = str(field("Number", "phone", "mobile") or phone)
     if not display_number.startswith("+"):
         display_number = "+" + display_number
     wa_link = "https://wa.me/" + display_number
     tg_link = "https://t.me/" + display_number
 
-    # Skip internal/watermark keys from rack API
-    RACK_SKIP = {"owner", "admin", "Number"}
-
     lines = ["┏━━━━━━━━━━━━━━━━━┓", "┃  📞 *Truecaller Lookup*", "┗━━━━━━━━━━━━━━━━━┛", ""]
-    lines.append("*Number:* `" + display_number + "` 🇮🇳")
+    lines.append("*Number:* `" + api_value_text(field("Number", "phone", "mobile") or phone) + "`")
     lines.append("")
 
-    # --- Section 1: Basic Info (from whocalled.in) ---
-    if has_api1:
-        lines.append("🔍 *Basic Info*")
-        lines.append("• *Name:* `" + val(record.get("name")) + "`")
-        if val(record.get("circle")) != "None":
-            lines.append("• *Carrier:* `" + val(record.get("circle")) + "`")
-        if val(record.get("email")) != "None":
-            lines.append("• *Email:* `" + val(record.get("email")) + "`")
-        if val(record.get("address")) != "None":
-            lines.append("• *Address:* `" + val(record.get("address")) + "`")
-        lines.append("")
-
-    # --- Section 2: Advanced Info (from rack-72au) ---
-    if has_api2:
-        # Priority fields shown first
-        PRIORITY_KEYS = [
-            "Owner Name", "Owner Address", "Connection", "SIM Card",
-            "Mobile State", "Country", "Hometown", "Language",
-            "Mobile Locations", "Tower Locations", "Reference City",
-            "IMEI Number", "IP Address", "MAC Address",
-            "Tracker ID", "Tracking History", "Complaints",
-        ]
-        lines.append("📡 *Advanced Info*")
-        shown = set()
-        for k in PRIORITY_KEYS:
-            v = rack_data.get(k)
-            if v and k not in RACK_SKIP:
-                lines.append("• *" + k + ":* `" + str(v) + "`")
-                shown.add(k)
-        # Any remaining keys not in priority list
-        for k, v in rack_data.items():
-            if k not in shown and k not in RACK_SKIP and v:
-                lines.append("• *" + k + ":* `" + str(v) + "`")
-        lines.append("")
+    lines.append("🔍 *Caller Info*")
+    fields = [
+        ("Name", ("Owner Name", "name")),
+        ("Address", ("Owner Address", "address")),
+        ("Connection", ("Connection", "connection")),
+        ("SIM Card", ("SIM card", "sim_card")),
+        ("Mobile State", ("Mobile State", "mobile_state")),
+        ("Country", ("Country", "country")),
+        ("Hometown", ("Hometown", "hometown")),
+        ("Language", ("Language", "language")),
+        ("Reference City", ("Reference City", "reference_city")),
+        ("IMEI", ("IMEI number", "imei", "imei_number")),
+        ("IP Address", ("IP address", "ip_address")),
+        ("MAC Address", ("MAC address", "mac_address")),
+        ("Mobile Locations", ("Mobile Locations", "mobile_locations")),
+        ("Tower Locations", ("Tower Locations", "tower_locations")),
+        ("Tracker ID", ("Tracker Id", "tracker_id")),
+        ("Tracking History", ("Tracking History", "tracking_history")),
+        ("Complaints", ("Complaints", "complaints")),
+    ]
+    for label, keys in fields:
+        value = field(*keys)
+        if api_value_present(value):
+            lines.append("• *" + label + ":* `" + api_value_text(value) + "`")
 
     lines.append("[💬 WhatsApp](" + wa_link + ") | [✈️ Telegram](" + tg_link + ")")
 
     sent = await update.message.reply_text("\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
     schedule_result_cleanup(context, chat_id, [sent.message_id])
+
+
+async def email_lookup(update, context):
+    if not await guard_with_cooldown(update, context):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "*Usage:* `/emailinfo example@gmail.com`",
+            parse_mode="Markdown",
+        )
+        return
+    user_id = update.message.from_user.id
+    chat_id = update.message.chat_id
+    email = context.args[0].strip()
+
+    searching = await update.message.reply_text("🔍 Searching email information...")
+    raw = await safe_fetch_json(YESUKIE_EMAIL_URL.format(query=quote(email)), timeout=20)
+    await delete_msg(context, chat_id, searching.message_id)
+
+    data = get_api_data(raw)
+    if not isinstance(data, dict):
+        await send_expiring_lookup_message(
+            update, context,
+            "*❌ Data Not Found!*\n\nNo information found for this email.",
+            parse_mode="Markdown",
+        )
+        return
+
+    fields = [
+        ("Email", ("Email", "email")),
+        ("Domain", ("Domain", "domain")),
+        ("Provider", ("Provider", "provider")),
+        ("Disposable", ("Disposable", "disposable")),
+        ("Creation Date", ("Creation Date", "creation_date")),
+        ("Expiration Date", ("Expiration Date", "expiration_date")),
+        ("Domain IP", ("Domain IP", "domain_ip")),
+        ("ISP", ("ISP", "isp")),
+        ("Registrar", ("Registrar", "registrar")),
+        ("SSL Issuer", ("SSL Issuer", "ssl_issuer")),
+        ("Server Location", ("Server Location", "server_location")),
+        ("MX Records", ("MX Records", "mx_records")),
+        ("Breaches Found", ("Breaches Found", "breaches_found")),
+    ]
+    lines = api_field_lines(data, fields)
+    if not lines:
+        await send_expiring_lookup_message(
+            update, context,
+            "*❌ Data Not Found!*\n\nNo information found for this email.",
+            parse_mode="Markdown",
+        )
+        return
+
+    increment_search(user_id)
+    text = "📧 *Email Information*\n\n*Query:* `" + email + "`\n\n" + "\n".join(lines)
+    await send_expiring_lookup_message(update, context, text, parse_mode="Markdown")
+
+
+async def free_fire_info_lookup(update, context):
+    if not await guard_with_cooldown(update, context):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "*Usage:* `/ffinfo 552756708`",
+            parse_mode="Markdown",
+        )
+        return
+    user_id = update.message.from_user.id
+    chat_id = update.message.chat_id
+    uid = context.args[0].strip()
+
+    searching = await update.message.reply_text("🔍 Searching Free Fire information...")
+    raw = await safe_fetch_json(YESUKIE_FREE_FIRE_URL.format(query=quote(uid)), timeout=20)
+    await delete_msg(context, chat_id, searching.message_id)
+
+    data = get_api_data(raw)
+    if not isinstance(data, dict):
+        await send_expiring_lookup_message(
+            update, context,
+            "*❌ Data Not Found!*\n\nNo information found for this Free Fire UID.",
+            parse_mode="Markdown",
+        )
+        return
+
+    fields = [
+        ("UID", ("uid", "UID", "player_uid", "player_id", "id")),
+        ("Player", ("player", "nickname", "name", "username")),
+        ("Region", ("region", "server")),
+        ("Level", ("level", "player_level")),
+        ("Likes", ("likes", "like_count")),
+        ("Rank", ("rank", "current_rank")),
+        ("Guild", ("guild", "guild_name")),
+        ("Last Login", ("last_login", "last_login_time")),
+    ]
+    lines = api_field_lines(data, fields)
+    if not lines:
+        await send_expiring_lookup_message(
+            update, context,
+            "*❌ Data Not Found!*\n\nNo information found for this Free Fire UID.",
+            parse_mode="Markdown",
+        )
+        return
+
+    increment_search(user_id)
+    text = "🎮 *Free Fire Information*\n\n*UID:* `" + uid + "`\n\n" + "\n".join(lines)
+    await send_expiring_lookup_message(update, context, text, parse_mode="Markdown")
+
+
+async def aadhar_bank_lookup(update, context):
+    if not await guard_with_cooldown(update, context):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "*Usage:* `/aadharbank 123456789012`",
+            parse_mode="Markdown",
+        )
+        return
+    user_id = update.message.from_user.id
+    chat_id = update.message.chat_id
+    aadhar = context.args[0].replace(" ", "").replace("-", "")
+    if len(aadhar) != 12 or not aadhar.isdigit():
+        await update.message.reply_text(
+            "*❌ Invalid Aadhar!*\n\nPlease enter a valid 12-digit Aadhar number.",
+            parse_mode="Markdown",
+        )
+        return
+
+    searching = await update.message.reply_text("🔍 Searching bank information...")
+    raw = await safe_fetch_json(YESUKIE_AADHAR_BANK_URL.format(query=aadhar), timeout=20)
+    await delete_msg(context, chat_id, searching.message_id)
+
+    data = get_api_data(raw)
+    if not isinstance(data, dict):
+        await send_expiring_lookup_message(
+            update, context,
+            "*❌ Data Not Found!*\n\nNo bank information found for this Aadhar.",
+            parse_mode="Markdown",
+        )
+        return
+
+    fields = [
+        ("Aadhar", ("aadhaar", "aadhar", "aadhaar_number", "aadhar_number")),
+        ("Name", ("name", "account_name", "holder_name")),
+        ("Bank", ("bank", "bank_name")),
+        ("Account Number", ("account_number", "account_no", "account")),
+        ("IFSC", ("ifsc", "ifsc_code")),
+        ("Branch", ("branch", "branch_name")),
+        ("Mobile", ("mobile", "phone", "registered_mobile")),
+        ("UPI", ("upi", "upi_id")),
+    ]
+    lines = api_field_lines(data, fields)
+    if not lines:
+        await send_expiring_lookup_message(
+            update, context,
+            "*❌ Data Not Found!*\n\nNo bank information found for this Aadhar.",
+            parse_mode="Markdown",
+        )
+        return
+
+    increment_search(user_id)
+    text = "🏦 *Aadhar to Bank Information*\n\n" + "\n".join(lines)
+    await send_expiring_lookup_message(update, context, text, parse_mode="Markdown")
+
+
+async def aadhar_pan_lookup(update, context):
+    if not await guard_with_cooldown(update, context):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "*Usage:* `/aadharpan 123456789012`",
+            parse_mode="Markdown",
+        )
+        return
+    user_id = update.message.from_user.id
+    chat_id = update.message.chat_id
+    aadhar = context.args[0].replace(" ", "").replace("-", "")
+    if len(aadhar) != 12 or not aadhar.isdigit():
+        await update.message.reply_text(
+            "*❌ Invalid Aadhar!*\n\nPlease enter a valid 12-digit Aadhar number.",
+            parse_mode="Markdown",
+        )
+        return
+
+    searching = await update.message.reply_text("🔍 Searching PAN information...")
+    raw = await safe_fetch_json(YESUKIE_AADHAR_PAN_URL.format(query=aadhar), timeout=20)
+    await delete_msg(context, chat_id, searching.message_id)
+
+    data = get_api_data(raw)
+    if not isinstance(data, dict):
+        await send_expiring_lookup_message(
+            update, context,
+            "*❌ Data Not Found!*\n\nNo PAN information found for this Aadhar.",
+            parse_mode="Markdown",
+        )
+        return
+
+    fields = [
+        ("Aadhar", ("aadhaar", "aadhar", "aadhaar_number", "aadhar_number")),
+        ("PAN", ("pan", "pan_number", "masked_pan", "pan_masked")),
+        ("Name", ("name", "holder_name")),
+    ]
+    lines = api_field_lines(data, fields)
+    if not lines:
+        await send_expiring_lookup_message(
+            update, context,
+            "*❌ Data Not Found!*\n\nNo PAN information found for this Aadhar.",
+            parse_mode="Markdown",
+        )
+        return
+
+    increment_search(user_id)
+    text = "🪪 *Aadhar to PAN Information*\n\n" + "\n".join(lines)
+    await send_expiring_lookup_message(update, context, text, parse_mode="Markdown")
+
+
+async def gst_lookup(update, context):
+    if not await guard_with_cooldown(update, context):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "*Usage:* `/gstinfo 29AACCF0683K1ZD`",
+            parse_mode="Markdown",
+        )
+        return
+    user_id = update.message.from_user.id
+    chat_id = update.message.chat_id
+    gstin = context.args[0].strip().upper()
+
+    searching = await update.message.reply_text("🔍 Searching GST information...")
+    raw = await safe_fetch_json(YESUKIE_GST_URL.format(query=quote(gstin)), timeout=20)
+    await delete_msg(context, chat_id, searching.message_id)
+
+    data = get_api_data(raw)
+    if not isinstance(data, dict):
+        await send_expiring_lookup_message(
+            update, context,
+            "*❌ Data Not Found!*\n\nNo GST information found for this GSTIN.",
+            parse_mode="Markdown",
+        )
+        return
+
+    details = (
+        data.get("razorpay_info", {})
+        .get("enrichment_details", {})
+        .get("online_provider", {})
+        .get("details", {})
+        if isinstance(data.get("razorpay_info"), dict)
+        else {}
+    )
+
+    def gst_value(key):
+        value = details.get(key) if isinstance(details, dict) else None
+        if isinstance(value, dict):
+            value = value.get("value")
+        if not api_value_present(value):
+            value = data.get(key)
+        return value
+
+    fields = [
+        ("GSTIN", gst_value("gstin") or data.get("gstin")),
+        ("Legal Name", gst_value("legal_name")),
+        ("Trade Name", gst_value("trade_name")),
+        ("Constitution", gst_value("constitution")),
+        ("Registration Date", gst_value("registration_date")),
+        ("Status", gst_value("status")),
+        ("Taxpayer Type", gst_value("tax_payer_type")),
+        ("Central Jurisdiction", gst_value("central_jurisdiction")),
+        ("State Jurisdiction", gst_value("state_jurisdiction")),
+        ("Primary Address", gst_value("primary_address")),
+    ]
+    lines = [
+        "• *" + label + ":* `" + api_value_text(value) + "`"
+        for label, value in fields
+        if api_value_present(value)
+    ]
+    if not lines:
+        await send_expiring_lookup_message(
+            update, context,
+            "*❌ Data Not Found!*\n\nNo GST information found for this GSTIN.",
+            parse_mode="Markdown",
+        )
+        return
+
+    increment_search(user_id)
+    text = "🏢 *GST Information*\n\n" + "\n".join(lines)
+    await send_expiring_lookup_message(update, context, text, parse_mode="Markdown")
 
 
 async def leak_lookup(update, context):
@@ -2943,6 +3304,11 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(leak_page_callback, pattern="^leakpg:"))
     app.add_handler(CommandHandler("vehinfo", vehinfo_lookup))
     app.add_handler(CommandHandler("true", true_lookup))
+    app.add_handler(CommandHandler("emailinfo", email_lookup))
+    app.add_handler(CommandHandler("ffinfo", free_fire_info_lookup))
+    app.add_handler(CommandHandler("aadharbank", aadhar_bank_lookup))
+    app.add_handler(CommandHandler("aadharpan", aadhar_pan_lookup))
+    app.add_handler(CommandHandler("gstinfo", gst_lookup))
     app.add_handler(CommandHandler("weather", weather_lookup))
     app.add_handler(CommandHandler("aqi", aqi_lookup))
     app.add_handler(CommandHandler("pincode", pincode_lookup))
