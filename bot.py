@@ -1516,7 +1516,7 @@ async def lookup(update, context):
         "status code", "status_code", "http status", "http_status",
         "api developer", "api_developer", "today used", "today_used",
         "daily used", "daily_used", "remaining", "requests left",
-        "requests_left",
+        "requests_left", "updates",
     }
     LABEL_MAP = {
         "number": "Number", "phone": "Number", "mobile": "Number",
@@ -1713,17 +1713,21 @@ async def pak_lookup(update, context):
     await delete_msg(context, chat_id, searching.message_id)
     entries = []
     if isinstance(data, dict) and data.get("success"):
-        result = data.get("result") or data.get("data") or {}
-        if isinstance(result, dict):
-            inner = result.get("data", {})
-            if isinstance(inner, dict):
-                rows = inner.get("data", {})
-                if isinstance(rows, dict):
-                    results_list = rows.get("results", [])
-                    if isinstance(results_list, list):
-                        entries = results_list
-                elif isinstance(rows, list):
-                    entries = rows
+        records = data.get("records")
+        if isinstance(records, list):
+            entries = records
+        else:
+            result = data.get("result") or data.get("data") or {}
+            if isinstance(result, dict):
+                inner = result.get("data", {})
+                if isinstance(inner, dict):
+                    rows = inner.get("data", {})
+                    if isinstance(rows, dict):
+                        results_list = rows.get("results", [])
+                        if isinstance(results_list, list):
+                            entries = results_list
+                    elif isinstance(rows, list):
+                        entries = rows
     if not entries:
         await send_expiring_lookup_message(update, context, "*❌ Data Not Found!*\n\nNo information found for this Pakistan number.", parse_mode="Markdown")
         return
@@ -1735,8 +1739,10 @@ async def pak_lookup(update, context):
             "*Result " + str(i) + "/" + str(len(entries)) + "*\n\n"
             "*Number:* `" + number + "`\n"
             "*Name:* `" + pv(entry.get("name") or entry.get("NAME")) + "`\n"
+            "*Mobile:* `" + pv(entry.get("mobile") or entry.get("MOBILE")) + "`\n"
+            "*CNIC:* `" + pv(entry.get("cnic") or entry.get("CNIC")) + "`\n"
             "*Address:* `" + pv(entry.get("address") or entry.get("ADDRESS")) + "`\n"
-            "*Operator:* `" + pv(entry.get("operator") or entry.get("circle")) + "`"
+            "*Network:* `" + pv(entry.get("network") or entry.get("operator") or entry.get("circle")) + "`"
         )
         sent = await update.message.reply_text(text, parse_mode="Markdown")
         result_message_ids.append(sent.message_id)
