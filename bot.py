@@ -42,12 +42,9 @@ IA_KEY = "Rack"
 IA_NUM_URL = IA_BASE + "/num?key=" + IA_KEY + "&q={number}"
 IA_NUMV2_URL = IA_BASE + "/numv2?key=" + IA_KEY + "&q={number}"
 IA_ADHAR_URL = IA_BASE + "/adhar?key=" + IA_KEY + "&q={aadhar}"
-ROOTX_TG_NUM_URL = "https://rootx-osint.in/?type=tg_num&key=abror&query={term}"
-TG_NUM_FALLBACK_URL = "https://api.igfollows.site/TG/index.php?type=user&key=OGGYxKRISH&term={term}"
-PAID_TG_NUM_FALLBACK_URL = "https://paid.originalapis.workers.dev/tg?key=Harsha&id={id}"
 IA_IFSC_URL = IA_BASE + "/ifsc?key=" + IA_KEY + "&q={code}"
 IA_INSTA_URL = IA_BASE + "/insta?key=" + IA_KEY + "&q={username}"
-IA_PAK_URL = IA_BASE + "/pak?key=" + IA_KEY + "&q={number}"
+PAK_INFO_URL = "http://wasifali.biz.id/public_apis/sim-info-api.php?search={number}"
 IA_VEH_URL = IA_BASE + "/veh?key=" + IA_KEY + "&q={veh}"
 IA_FAMILYINFO_URL = IA_BASE + "/familyinfo?key=" + IA_KEY + "&q={aadhar}"
 IA_LEAK_URL = IA_BASE + "/leak?key=" + IA_KEY + "&q={query}"
@@ -1485,24 +1482,10 @@ async def lookup(update, context):
         except Exception:
             return None
 
-    # RootX TG to Number API
-    data = await _try_fetch(ROOTX_TG_NUM_URL.format(term=term))
-    # Retry once if failed
-    if data is None:
-        data = await _try_fetch(ROOTX_TG_NUM_URL.format(term=term))
-
-    # Fallback Telegram-to-number API when the primary source returns no data.
-    if data is None:
-        data = await _try_fetch(
-            TG_NUM_FALLBACK_URL.format(term=quote(term, safe="@"))
-        )
-
-    # Final Telegram-ID-to-number fallback after the other providers fail.
-    # This endpoint accepts a numeric Telegram ID through the `id` parameter.
-    if data is None and is_number:
-        data = await _try_fetch(
-            PAID_TG_NUM_FALLBACK_URL.format(id=quote(digits_only, safe=""))
-        )
+    # Telegram lookup API
+    data = await _try_fetch(
+        IA_TG_URL.format(query=quote(term, safe="@"))
+    )
 
     await delete_msg(context, chat_id, searching.message_id)
 
@@ -1722,7 +1705,7 @@ async def pak_lookup(update, context):
     number = context.args[0].replace("+", "").replace(" ", "").replace("-", "")
     searching = await update.message.reply_text("🔍 Searching...")
     try:
-        data = await fetch_json(IA_PAK_URL.format(number=number), timeout=8)
+        data = await fetch_json(PAK_INFO_URL.format(number=number), timeout=8)
     except Exception:
         await delete_msg(context, chat_id, searching.message_id)
         await update.message.reply_text("*Server Error!*\n\nRequest failed. Please try again later.", parse_mode="Markdown")
