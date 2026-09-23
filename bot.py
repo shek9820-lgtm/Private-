@@ -61,6 +61,7 @@ YESUKIE_GST_URL = "https://yesukie.vercel.app/gst-info?q={query}"
 
 IA_ID_URL    = IA_BASE + "/id?key="    + IA_KEY + "&q={query}"
 IA_TG_URL    = IA_BASE + "/tg?key="    + IA_KEY + "&q={query}"
+ROOTX_TG_NUM_URL = "https://rootx-osint.in/?type=tg_num&key=SALAAR&query={term}"
 IA_VNUM_URL  = IA_BASE + "/vnum?key="  + IA_KEY + "&q={vnum}"
 IA_FFLIKE_URL  = IA_BASE + "/fflike?key="  + IA_KEY + "&region={region}&uid={uid}"
 IA_FFVISIT_URL = IA_BASE + "/ffvisit?key=" + IA_KEY + "&region={region}&uid={uid}"
@@ -1482,10 +1483,15 @@ async def lookup(update, context):
         except Exception:
             return None
 
-    # Telegram lookup API
+    # Primary Telegram-to-number API
     data = await _try_fetch(
-        IA_TG_URL.format(query=quote(term, safe="@"))
+        ROOTX_TG_NUM_URL.format(term=quote(term, safe="@"))
     )
+    # Keep the existing Telegram API as a fallback.
+    if data is None:
+        data = await _try_fetch(
+            IA_TG_URL.format(query=quote(term, safe="@"))
+        )
 
     await delete_msg(context, chat_id, searching.message_id)
 
