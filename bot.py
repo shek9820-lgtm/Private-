@@ -600,6 +600,7 @@ async def send_join_message(update, context):
     user = update.message.from_user
     first_name = user.first_name or "User"
     join_button = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📸 Follow on Instagram", url="https://www.instagram.com/racksune")],
         [InlineKeyboardButton("📢 Join Channel 1", url=CHANNEL_LINK)],
         [InlineKeyboardButton("📢 Join Channel 2", url=CHANNEL2_LINK)],
         [InlineKeyboardButton("👥 Join Group", url=GROUP_LINK)],
@@ -608,7 +609,8 @@ async def send_join_message(update, context):
     ])
     text = (
         "⚠️ *Hello " + first_name + "!*\n\n"
-        "Join our channels and group to use this bot.\n\n"
+        "Follow us on Instagram and join our channels and groups to use this bot.\n"
+        "_Instagram follow status cannot be verified by the bot._\n\n"
         "1️⃣ Join Channel 1: @racksun19\n"
         "2️⃣ Join Channel 2: @WEAYing\n"
         "3️⃣ Join Group: @racksungroup\n\n"
