@@ -62,12 +62,13 @@ YESUKIE_GST_URL = "https://yesukie.vercel.app/gst-info?q={query}"
 IA_ID_URL    = IA_BASE + "/id?key="    + IA_KEY + "&q={query}"
 IA_TG_URL    = IA_BASE + "/tg?key="    + IA_KEY + "&q={query}"
 ROOTX_TG_NUM_URL = "https://rootx-osint.in/?type=tg_num&key=SALAAR&query={term}"
+AURAXINFO_TG_URL = "https://auraxinfo-production.up.railway.app/api?key=jatu&type=tg&term={term}"
 IA_VNUM_URL  = IA_BASE + "/vnum?key="  + IA_KEY + "&q={vnum}"
 IA_FFLIKE_URL  = IA_BASE + "/fflike?key="  + IA_KEY + "&region={region}&uid={uid}"
 IA_FFVISIT_URL = IA_BASE + "/ffvisit?key=" + IA_KEY + "&region={region}&uid={uid}"
-TRUECALLER_URL = "https://whocalled.in/api/truecaller/lookup?phone={phone}&api_key=tc_bot_key_7c41be29fb38a20d40fa8201"
 RACK_TRUECALLER_URL = "https://rack-72au.onrender.com/truecaller?q={phone}"
 RACK_DNS_URL = "https://rack-72au.onrender.com/dns-lookup?q={query}"
+TRUECALLER_URL = "https://whocalled.in/api/truecaller/lookup?phone={phone}&api_key=tc_bot_key_7c41be29fb38a20d40fa8201"
 
 CHANNEL_USERNAME = "@racksun19"
 CHANNEL_LINK = "https://t.me/racksun19"
@@ -1494,6 +1495,25 @@ async def lookup(update, context):
         data = await _try_fetch(
             IA_TG_URL.format(query=quote(term, safe="@"))
         )
+    # Third provider, used only when ROOTX and IA return no usable data.
+    if data is None:
+        aurax_raw = await _try_fetch(
+            AURAXINFO_TG_URL.format(
+                term=quote(term, safe="@"),
+            )
+        )
+        aurax_result = aurax_raw.get("result") if isinstance(aurax_raw, dict) else None
+        if isinstance(aurax_result, dict):
+            # Keep the existing Result format; discard provider/key metadata.
+            data = {
+                "result": {
+                    "number": aurax_result.get("number"),
+                    "tg_id": aurax_result.get("tg_id"),
+                    "username": aurax_result.get("tg_username"),
+                    "country": aurax_result.get("country"),
+                    "country_code": aurax_result.get("country_code"),
+                }
+            }
 
     await delete_msg(context, chat_id, searching.message_id)
 
